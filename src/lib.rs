@@ -1,7 +1,6 @@
-mod lock_pool;
-mod sheets;
+mod sheet;
 
-use crate::lock_pool::create_lock_pool;
+use crate::sheet::create_lock_pool;
 use lazy_regex::regex_captures;
 use log::info;
 use rsheet_lib::{

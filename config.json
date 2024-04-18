@@ -1,0 +1,9 @@
+{
+  "interval_time": 10,
+  "min": 20,
+  "max": 100,
+  "expansion_threshold": 0.3,
+  "expansion_multiplier": 2,
+  "contraction_threshold": 0.1,
+  "contraction_multiplier": 0.9
+}

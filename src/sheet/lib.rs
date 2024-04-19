@@ -28,10 +28,7 @@ pub fn set_cell_value(
     let runner = CommandRunner::new(&formula);
     let (hash, mut dependency, check) = get_dependency_value(&runner, lock.clone());
 
-    let value = if dependency.contains(&cell) {
-        dependency.clear();
-        CellValue::Error(format!("Cell {} is self-referential.", cell))
-    } else if check {
+    let value = if check {
         runner.run(&hash)
     } else {
         CellValue::Error("Reference a Error Cell.".to_string())

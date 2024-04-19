@@ -46,9 +46,7 @@ impl Cell {
         let mut check = true;
 
         if let CellValue::Error(temp) = &self.value {
-            if "Could not cast Rhai return back to Cell Value." == temp
-                || temp.contains("is self-referential")
-            {
+            if "Could not cast Rhai return back to Cell Value." == temp {
                 check = false;
             }
         }
@@ -57,11 +55,14 @@ impl Cell {
             relieve_dependencies(self.formula.clone(), cell.clone(), lock.clone());
         }
 
+        self.timestamp = time;
+        self.formula = formula;
+
+        let mut check = false;
+
         if CellValue::Error("Could not cast Rhai return back to Cell Value.".to_string()) == value {
             self.value = value;
         } else {
-            check = false;
-
             for i in dependency {
                 let cell = cell.clone();
 
@@ -85,25 +86,50 @@ impl Cell {
             };
         }
 
-        self.timestamp = time;
-        self.formula = formula;
-
-        for i in self.dependencies.clone() {
-            let lock = lock.clone();
-            spawn(move || {
-                update_dependencies(i, lock);
-            });
+        if check {
+            for j in self.dependencies.clone() {
+                let cell = cell.clone();
+                let lock = lock.clone();
+                spawn(move || {
+                    update_err_dependencies(j, lock, cell.clone());
+                });
+            }
+        } else {
+            for i in &self.dependencies {
+                let lock = lock.clone();
+                spawn(move || {
+                    update_dependencies(i.to_string(), lock);
+                });
+            }
         }
     }
 
     pub fn update(&mut self, value: CellValue, lock: Arc<RwLock<Sheet>>) {
         self.value = value;
 
-        for i in self.dependencies.clone() {
+        for i in &self.dependencies {
             let lock = lock.clone();
             spawn(move || {
-                update_dependencies(i, lock);
+                update_dependencies(i.to_string(), lock);
             });
+        }
+    }
+
+    pub fn update_err(&mut self, lock: Arc<RwLock<Sheet>>, target: String, cell: String) {
+        if self.dependencies.contains(&cell) {
+            self.value = CellValue::Error(format!("Cell {target} is self-referential",));
+        } else {
+            self.value = CellValue::Error("Reference a Error Cell.".to_string());
+        }
+
+        for i in self.dependencies.clone() {
+            let cell = cell.clone();
+            if i != cell {
+                let lock = lock.clone();
+                spawn(move || {
+                    update_err_dependencies(i, lock, cell.clone());
+                });
+            }
         }
     }
 
@@ -128,7 +154,6 @@ pub fn add_dependencies(target: &str, cell: String, lock: Arc<RwLock<Sheet>>) {
     let cell_lock = get_or_insert(lock.clone(), target);
     let mut c = cell_lock.write().unwrap();
     c.add_dependency(cell.clone());
-    // println!("Adding dependency: {} -> {}", target, cell);
 }
 
 pub fn relieve_dependencies(formula: String, cell: String, lock: Arc<RwLock<Sheet>>) {
@@ -139,15 +164,12 @@ pub fn relieve_dependencies(formula: String, cell: String, lock: Arc<RwLock<Shee
 
             if regex.3.is_empty() {
                 remove_dependencies(regex.1.to_string(), &cell, lock.clone());
-                // println!("Removing dependency: {} -> {}", regex.1, cell);
             } else if regex.1 == regex.4 {
                 for j in regex.2.parse::<u32>().unwrap()..=regex.5.parse::<u32>().unwrap() {
-                    // println!("Removing dependency: {}{} -> {}", regex.1, j, cell);
                     remove_dependencies(format!("{}{}", regex.1, j), &cell, lock.clone());
                 }
             } else if regex.2 == regex.5 {
                 for j in column_name_to_number(regex.1)..=column_name_to_number(regex.4) {
-                    // println!("Removing dependency: {}{} -> {}", column_number_to_name(j), regex.2, cell);
                     remove_dependencies(
                         format!("{}{}", column_number_to_name(j), regex.2),
                         &cell,
@@ -181,6 +203,12 @@ pub fn remove_dependencies(target: String, cell: &str, lock: Arc<RwLock<Sheet>>)
     let cell_lock = get_or_insert(lock.clone(), &target);
     let mut c = cell_lock.write().unwrap();
     c.remove_dependency(cell);
+}
+
+pub fn update_err_dependencies(target_cell: String, lock: Arc<RwLock<Sheet>>, cell: String) {
+    let cell_lock = get_or_insert(lock.clone(), &target_cell);
+    let mut c = cell_lock.write().unwrap();
+    c.update_err(lock.clone(), target_cell, cell)
 }
 
 pub fn update_dependencies(cell: String, lock: Arc<RwLock<Sheet>>) {

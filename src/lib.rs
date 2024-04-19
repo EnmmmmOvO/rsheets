@@ -1,18 +1,17 @@
 mod sheet;
 
-use crate::sheet::{create_lock_pool, get_cell_value, set_cell_value};
+use crate::sheet::{create_lock_pool, get_cell_value, LockPool, set_cell_value};
 use lazy_regex::regex_captures;
 use log::info;
 use rsheet_lib::cell_value::CellValue;
-use rsheet_lib::connect::ConnectionError;
+use rsheet_lib::connect::{ConnectionError, ReaderWriter};
 use rsheet_lib::{
     cells::column_name_to_number,
     connect::{Manager, Reader, Writer},
     replies::Reply,
 };
-use std::error::Error;
-use std::sync::{Arc, Mutex};
-use std::thread;
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::spawn;
 
 #[derive(Debug)]
 pub enum Action {
@@ -20,48 +19,52 @@ pub enum Action {
     Get(u32, u32, String),
 }
 
-pub fn start_server<M>(manager: Arc<Mutex<M>>) -> Result<(), Box<dyn Error>>
+fn create_new_thread<M>(mut recv: <<M as Manager>::ReaderWriter as ReaderWriter>::Reader, mut send: <<M as Manager>::ReaderWriter as ReaderWriter>::Writer, lock: Arc<Mutex<LockPool>>, condvar: Arc<Condvar>) -> Result<(), ConnectionError>
 where
-    M: Manager,
+    M: Manager + Send + 'static
+{
+    loop {
+        let msg = recv.read_message()?;
+        info!("Just got message");
+        let lock = lock.clone();
+        let condvar = condvar.clone();
+
+        match parse_input(&msg) {
+            Ok(Action::Set(row, col, value)) => {
+                set_cell_value(row, col, value, lock, condvar)?;
+            }
+            Ok(Action::Get(row, col, cell)) => match get_cell_value(row, col, lock, condvar) {
+                CellValue::Error(e) => {
+                    send.write_message(Reply::Error(e))?;
+                }
+                value => {
+                    send.write_message(Reply::Value(cell, value))?;
+                }
+            },
+            Err(e) => {
+                send.write_message(Reply::Error(e.to_string()))?;
+            }
+        }
+    }
+}
+
+pub fn start_server<M>(manager: Arc<Mutex<M>>) -> Result<(), ConnectionError>
+where
+    M: Manager + Send + 'static
 {
     let (lock, condvar) = create_lock_pool();
 
     loop {
-        let lock = lock.clone();
-        let condvar = condvar.clone();
+        let manager_lock = manager.clone();
+        let mut m = manager_lock.lock().unwrap();
 
-        let (mut recv, mut send) = manager
-            .clone()
-            .lock()
-            .unwrap()
-            .accept_new_connection()
-            .unwrap();
-
-        let msg = recv.read_message()?;
-
-        thread::spawn(move || -> Result<(), ConnectionError> {
-            info!("Just got message");
+        if let Ok((recv, send)) = m.accept_new_connection() {
             let lock = lock.clone();
             let condvar = condvar.clone();
-
-            match parse_input(&msg) {
-                Ok(Action::Set(row, col, value)) => {
-                    set_cell_value(row, col, value, lock, condvar)?;
-                }
-                Ok(Action::Get(row, col, cell)) => match get_cell_value(row, col, lock, condvar) {
-                    CellValue::Error(e) => {
-                        send.write_message(Reply::Error(e))?;
-                    }
-                    value => {
-                        send.write_message(Reply::Value(cell, value))?;
-                    }
-                },
-                Err(e) => {
-                    send.write_message(Reply::Error(e.to_string()))?;
-                }
-            }
-            Ok(())
-        });
+            spawn(move || -> Result<(), ConnectionError> {
+                create_new_thread::<M>(recv, send, lock, condvar)
+            });
+        }
     }
 }
 

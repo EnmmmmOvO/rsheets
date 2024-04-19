@@ -1,9 +1,8 @@
-use std::error::Error;
 use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 use rsheet::start_server;
-use rsheet_lib::connect::{resolve_address, ConnectionManager, TerminalManager};
+use rsheet_lib::connect::{resolve_address, ConnectionManager, TerminalManager, ConnectionError};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -15,7 +14,7 @@ struct Args {
     mark_mode: bool,
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), ConnectionError> {
     env_logger::init();
 
     let args = Args::parse();

@@ -106,8 +106,17 @@ impl Cell {
         }
     }
 
-    pub fn update(&mut self, value: CellValue) {
+    pub fn update(&mut self, value: CellValue, lock: Arc<Mutex<LockPool>>, condvar: Arc<Condvar>) {
         self.value = value;
+
+        for (r, c) in self.dependencies.clone() {
+            let lock = lock.clone();
+            let condvar = condvar.clone();
+            spawn(move || {
+                update_dependencies(r, c, lock, condvar);
+            });
+        }
+
     }
 
     pub fn get_value(&self) -> CellValue {
@@ -221,6 +230,6 @@ pub fn update_dependencies(row: u32, col: u32, lock: Arc<Mutex<LockPool>>, condv
     let (hash, _) = get_dependency_value(&runner, lock.clone(), condvar.clone());
     let value = runner.run(&hash);
     let mut cell = cell_lock.lock().unwrap();
-    cell.update(value);
+    cell.update(value, lock.clone(), condvar.clone());
     unlock!(lock, condvar, row, col, cell_lock, cell);
 }

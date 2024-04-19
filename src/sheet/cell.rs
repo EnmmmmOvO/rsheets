@@ -115,8 +115,8 @@ impl Cell {
         self.dependencies.insert(cell);
     }
 
-    pub fn remove_dependency(&mut self, cell: String) {
-        self.dependencies.retain(|x| x != &cell);
+    pub fn remove_dependency(&mut self, cell: &str) {
+        self.dependencies.retain(|x| x != cell);
     }
 
     pub fn get_formula(&self) -> &str {
@@ -138,19 +138,19 @@ pub fn relieve_dependencies(formula: String, cell: String, lock: Arc<RwLock<Shee
                 lazy_regex::regex_captures!(r"([A-Z]+)(\d+)(_([A-Z]+)(\d+))?", i.as_str()).unwrap();
 
             if regex.3.is_empty() {
-                remove_dependencies(regex.1.to_string(), cell.clone(), lock.clone());
+                remove_dependencies(regex.1.to_string(), &cell, lock.clone());
                 // println!("Removing dependency: {} -> {}", regex.1, cell);
             } else if regex.1 == regex.4 {
                 for j in regex.2.parse::<u32>().unwrap()..=regex.5.parse::<u32>().unwrap() {
                     // println!("Removing dependency: {}{} -> {}", regex.1, j, cell);
-                    remove_dependencies(format!("{}{}", regex.1, j), cell.clone(), lock.clone());
+                    remove_dependencies(format!("{}{}", regex.1, j), &cell, lock.clone());
                 }
             } else if regex.2 == regex.5 {
                 for j in column_name_to_number(regex.1)..=column_name_to_number(regex.4) {
                     // println!("Removing dependency: {}{} -> {}", column_number_to_name(j), regex.2, cell);
                     remove_dependencies(
                         format!("{}{}", column_number_to_name(j), regex.2),
-                        i.clone(),
+                        &cell,
                         lock.clone(),
                     );
                 }
@@ -165,15 +165,9 @@ pub fn relieve_dependencies(formula: String, cell: String, lock: Arc<RwLock<Shee
                 );
                 for j in row1..=row2 {
                     for k in col1..=col2 {
-                        // println!(
-                        //     "Removing dependency: {}{} -> {}",
-                        //     column_number_to_name(k),
-                        //     j,
-                        //     cell
-                        // );
                         remove_dependencies(
                             format!("{}{}", column_number_to_name(k), j),
-                            cell.clone(),
+                            &cell,
                             lock.clone(),
                         );
                     }
@@ -183,15 +177,13 @@ pub fn relieve_dependencies(formula: String, cell: String, lock: Arc<RwLock<Shee
     });
 }
 
-pub fn remove_dependencies(target: String, cell: String, lock: Arc<RwLock<Sheet>>) {
-    // println!("Removing dependency: {} -> {}", target, cell);
+pub fn remove_dependencies(target: String, cell: &str, lock: Arc<RwLock<Sheet>>) {
     let cell_lock = get_or_insert(lock.clone(), &target);
     let mut c = cell_lock.write().unwrap();
     c.remove_dependency(cell);
 }
 
 pub fn update_dependencies(cell: String, lock: Arc<RwLock<Sheet>>) {
-    // println!("Updating dependencies: {}", cell);
     let cell_lock = get_or_insert(lock.clone(), &cell);
 
     let binding = cell_lock.clone();
@@ -202,5 +194,5 @@ pub fn update_dependencies(cell: String, lock: Arc<RwLock<Sheet>>) {
     let (hash, _) = get_dependency_value(&runner, lock.clone());
     let value = runner.run(&hash);
     let mut cell = cell_lock.write().unwrap();
-    cell.update(value, lock.clone());
+    cell.update(value, lock);
 }

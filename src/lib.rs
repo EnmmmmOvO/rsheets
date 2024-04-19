@@ -26,7 +26,12 @@ where
     M: Manager + Send + 'static
 {
     loop {
-        let msg = recv.read_message()?;
+        let msg;
+        if let Ok(m) = recv.read_message() {
+            msg = m;
+        } else {
+            break;
+        }
         info!("Just got message");
         let lock = lock.clone();
         let condvar = condvar.clone();
@@ -48,6 +53,7 @@ where
             }
         }
     }
+    Ok(())
 }
 
 pub fn start_server<M>(mut manager: M) -> Result<(), ConnectionError>
@@ -55,17 +61,20 @@ where
     M: Manager + Send + 'static
 {
     let (lock, condvar) = create_lock_pool();
-
+    let mut record = vec![];
     loop {
         if let Ok((recv, send)) = manager.accept_new_connection() {
             let lock = lock.clone();
             let condvar = condvar.clone();
-            spawn(move || -> Result<(), ConnectionError> {
+            record.push(spawn(move || -> Result<(), ConnectionError> {
                 create_new_thread::<M>(recv, send, lock, condvar)
-            });
+            }));
         } else {
             break;
         }
+    }
+    for handle in record {
+        handle.join().unwrap()?;
     }
     Ok(())
 }

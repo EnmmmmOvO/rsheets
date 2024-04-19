@@ -3,6 +3,7 @@ mod sheet;
 use crate::sheet::{create_lock_pool, get_cell_value, set_cell_value};
 use lazy_regex::regex_captures;
 use log::info;
+use rsheet_lib::cell_value::CellValue;
 use rsheet_lib::connect::ConnectionError;
 use rsheet_lib::{
     cells::column_name_to_number,
@@ -47,12 +48,14 @@ where
                 Ok(Action::Set(row, col, value)) => {
                     set_cell_value(row, col, value, lock, condvar)?;
                 }
-                Ok(Action::Get(row, col, cell)) => {
-                    send.write_message(Reply::Value(
-                        cell,
-                        get_cell_value(row, col, lock, condvar),
-                    ))?;
-                }
+                Ok(Action::Get(row, col, cell)) => match get_cell_value(row, col, lock, condvar) {
+                    CellValue::Error(e) => {
+                        send.write_message(Reply::Error(e))?;
+                    }
+                    value => {
+                        send.write_message(Reply::Value(cell, value))?;
+                    }
+                },
                 Err(e) => {
                     send.write_message(Reply::Error(e.to_string()))?;
                 }

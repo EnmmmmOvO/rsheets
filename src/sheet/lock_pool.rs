@@ -137,7 +137,7 @@ impl LockPool {
     }
 
     // pub fn print(&self) {
-    //     println!("map: {:?}", self.map,);
+    //     println!("map: {:?}", self.free_list,);
     // }
 }
 

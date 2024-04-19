@@ -3,6 +3,7 @@ mod sheet;
 use crate::sheet::{get_cell_value, set_cell_value, Sheet};
 use lazy_regex::regex_captures;
 use log::info;
+use rsheet_lib::cell_value::CellValue;
 use rsheet_lib::connect::{ConnectionError, ReaderWriter};
 use rsheet_lib::{
     connect::{Manager, Reader, Writer},
@@ -10,7 +11,6 @@ use rsheet_lib::{
 };
 use std::sync::{Arc, RwLock};
 use std::thread::spawn;
-use rsheet_lib::cell_value::CellValue;
 
 #[derive(Debug)]
 pub enum Action {
@@ -34,20 +34,18 @@ where
             Ok(Action::Set(cell, value)) => {
                 set_cell_value(cell, value, lock)?;
             }
-            Ok(Action::Get(cell)) => {
-                match get_cell_value(cell.clone(), lock) {
-                    CellValue::Error(e) => {
-                        if e == "Reference a Error Cell." {
-                            send.write_message(Reply::Error("Reference a Error Cell.".to_string()))?;
-                        } else {
-                            send.write_message(Reply::Value(cell, CellValue::Error(e)))?;
-                        }
-                    },
-                    value => {
-                        send.write_message(Reply::Value(cell, value))?;
+            Ok(Action::Get(cell)) => match get_cell_value(cell.clone(), lock) {
+                CellValue::Error(e) => {
+                    if e == "Reference a Error Cell." {
+                        send.write_message(Reply::Error("Reference a Error Cell.".to_string()))?;
+                    } else {
+                        send.write_message(Reply::Value(cell, CellValue::Error(e)))?;
                     }
                 }
-            }
+                value => {
+                    send.write_message(Reply::Value(cell, value))?;
+                }
+            },
             Err(e) => {
                 send.write_message(Reply::Error(e.to_string()))?;
             }

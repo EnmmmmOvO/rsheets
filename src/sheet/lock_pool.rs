@@ -1,7 +1,16 @@
 use crate::sheet::cell::Cell;
 use crate::sheet::lib::Config;
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex};
+
+#[macro_export]
+macro_rules! unlock {
+    ($lock:expr, $condvar:expr, $row:expr, $col:expr, $mutex:expr, $guard:expr) => {
+        drop($guard);
+        drop($mutex);
+        unlock($lock.clone(), $condvar.clone(), $row, $col);
+    };
+}
 
 #[derive(Debug)]
 pub struct LockPool {
@@ -35,12 +44,13 @@ impl LockPool {
             contraction_threshold: config.contraction_threshold,
             contraction_multiplier: config.contraction_multiplier,
             free_list: VecDeque::new(),
-            sheet: vec![vec![Cell::new(); 100]; 100],
+            sheet: vec![vec![]],
             map: HashMap::new(),
         }
     }
 
     pub fn get_or_insert(&mut self, row: u32, col: u32) -> Option<Arc<Mutex<Cell>>> {
+        self.expansion(row, col);
         if let Some(lock) = self.map.get(&(row, col)) {
             if Arc::strong_count(lock) == 1 {
                 for (i, (r, c)) in self.free_list.iter().enumerate() {
@@ -77,8 +87,7 @@ impl LockPool {
         self.sheet[row as usize][col as usize] = cell.clone();
     }
 
-    pub fn unlock(&mut self, row: u32, col: u32, lock: MutexGuard<'_, Cell>) -> bool {
-        drop(lock);
+    pub fn unlock(&mut self, row: u32, col: u32) -> bool {
         if Arc::strong_count(self.map.get(&(row, col)).unwrap()) == 1 {
             self.free_list.push_back((row, col));
             return true;
@@ -111,5 +120,45 @@ impl LockPool {
         }
         self.wait = 0;
         self.visit = 0;
+    }
+
+    fn expansion(&mut self, row: u32, col: u32) {
+        if row as usize >= self.sheet.len() {
+            for _ in 0..(row as usize - self.sheet.len() + 1) {
+                self.sheet.push(vec![]);
+            }
+        }
+
+        if col as usize >= self.sheet[row as usize].len() {
+            for _ in 0..(col - self.sheet[row as usize].len() as u32 + 1) {
+                self.sheet[row as usize].push(Cell::new_blank());
+            }
+        }
+    }
+
+    // pub fn print(&self) {
+    //     println!("map: {:?}", self.map,);
+    // }
+}
+
+pub fn get_or_insert(
+    lock: Arc<Mutex<LockPool>>,
+    condvar: Arc<Condvar>,
+    row: u32,
+    col: u32,
+) -> Arc<Mutex<Cell>> {
+    let mut guard = lock.lock().unwrap();
+    loop {
+        if let Some(p) = guard.get_or_insert(row, col) {
+            return p;
+        }
+        guard = condvar.wait(guard).unwrap();
+    }
+}
+
+pub fn unlock(lock: Arc<Mutex<LockPool>>, condvar: Arc<Condvar>, row: u32, col: u32) {
+    let mut lock = lock.lock().unwrap();
+    if lock.unlock(row, col) {
+        condvar.notify_one();
     }
 }

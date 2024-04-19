@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 use rsheet::start_server;
@@ -21,10 +22,13 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     if let Some(addr) = args.addr {
         let addr = resolve_address(&addr)?;
-        let manager = ConnectionManager::launch(addr.ip(), addr.port());
+        let manager = Arc::new(Mutex::new(ConnectionManager::launch(
+            addr.ip(),
+            addr.port(),
+        )));
         start_server(manager)
     } else {
-        let manager = TerminalManager::launch(args.mark_mode);
+        let manager = Arc::new(Mutex::new(TerminalManager::launch(args.mark_mode)));
         start_server(manager)
     }
 }

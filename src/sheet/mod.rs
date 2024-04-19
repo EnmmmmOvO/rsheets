@@ -2,5 +2,5 @@ mod cell;
 mod lib;
 mod lock_pool;
 
-pub use lib::{create_lock_pool, get_cell_value, set_cell_value};
-pub use lock_pool::LockPool;
+pub use lib::{get_cell_value, set_cell_value};
+pub use lock_pool::Sheet;

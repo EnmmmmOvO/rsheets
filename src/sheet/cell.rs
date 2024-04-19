@@ -1,6 +1,6 @@
 use crate::sheet::{
     lib::get_dependency_value,
-    lock_pool::{get_or_insert, unlock, LockPool},
+    lock_pool::{get_or_insert, Sheet},
 };
 use rsheet_lib::cell_value::CellValue;
 use rsheet_lib::{
@@ -8,17 +8,15 @@ use rsheet_lib::{
     command_runner::CommandRunner,
 };
 use std::collections::HashSet;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, RwLock};
 use std::thread::spawn;
 use std::time::SystemTime;
-
-use crate::unlock;
 
 #[derive(Debug, Clone)]
 pub struct Cell {
     value: CellValue,
     formula: String,
-    dependencies: HashSet<(u32, u32)>,
+    dependencies: HashSet<String>,
     timestamp: SystemTime,
 }
 
@@ -37,9 +35,9 @@ impl Cell {
         formula: String,
         value: CellValue,
         time: SystemTime,
-        dependency: HashSet<(u32, u32)>,
-        (row, col): (u32, u32),
-        (lock, condvar): (Arc<Mutex<LockPool>>, Arc<Condvar>),
+        dependency: HashSet<String>,
+        cell: String,
+        lock: Arc<RwLock<Sheet>>,
     ) {
         if time <= self.timestamp {
             return;
@@ -48,19 +46,15 @@ impl Cell {
         let mut check = true;
 
         if let CellValue::Error(temp) = &self.value {
-            if "Could not cast Rhai return back to Cell Value." == temp || temp.contains("is self-referential") {
+            if "Could not cast Rhai return back to Cell Value." == temp
+                || temp.contains("is self-referential")
+            {
                 check = false;
             }
         }
 
         if check {
-            relieve_dependencies(
-                self.formula.clone(),
-                row,
-                col,
-                lock.clone(),
-                condvar.clone(),
-            );
+            relieve_dependencies(self.formula.clone(), cell.clone(), lock.clone());
         }
 
         if CellValue::Error("Could not cast Rhai return back to Cell Value.".to_string()) == value {
@@ -68,27 +62,24 @@ impl Cell {
         } else {
             check = false;
 
-            for (r, c) in dependency {
-                if r == row && c == col {
+            for i in dependency {
+                let cell = cell.clone();
+
+                if i == cell {
                     check = true;
                     continue;
-                } else if self.dependencies.contains(&(r, c)) {
+                } else if self.dependencies.contains(&i) {
                     check = true;
                 }
                 let lock = lock.clone();
-                let condvar = condvar.clone();
 
                 spawn(move || {
-                    add_dependencies(r, c, row, col, lock, condvar);
+                    add_dependencies(&cell, i, lock);
                 });
             }
 
             self.value = if check {
-                CellValue::Error(format!(
-                    "Cell {}{} is self-referential",
-                    column_number_to_name(col),
-                    row + 1
-                ))
+                CellValue::Error(format!("Cell {cell} is self-referential",))
             } else {
                 value
             };
@@ -97,38 +88,35 @@ impl Cell {
         self.timestamp = time;
         self.formula = formula;
 
-        for (r, c) in self.dependencies.clone() {
+        for i in self.dependencies.clone() {
             let lock = lock.clone();
-            let condvar = condvar.clone();
             spawn(move || {
-                update_dependencies(r, c, lock, condvar);
+                update_dependencies(i, lock);
             });
         }
     }
 
-    pub fn update(&mut self, value: CellValue, lock: Arc<Mutex<LockPool>>, condvar: Arc<Condvar>) {
+    pub fn update(&mut self, value: CellValue, lock: Arc<RwLock<Sheet>>) {
         self.value = value;
 
-        for (r, c) in self.dependencies.clone() {
+        for i in self.dependencies.clone() {
             let lock = lock.clone();
-            let condvar = condvar.clone();
             spawn(move || {
-                update_dependencies(r, c, lock, condvar);
+                update_dependencies(i, lock);
             });
         }
-
     }
 
     pub fn get_value(&self) -> CellValue {
         self.value.clone()
     }
 
-    pub fn add_dependency(&mut self, row: u32, col: u32) {
-        self.dependencies.insert((row, col));
+    pub fn add_dependency(&mut self, cell: String) {
+        self.dependencies.insert(cell);
     }
 
-    pub fn remove_dependency(&mut self, row: u32, col: u32) {
-        self.dependencies.retain(|x| x != &(row, col));
+    pub fn remove_dependency(&mut self, cell: String) {
+        self.dependencies.retain(|x| x != &cell);
     }
 
     pub fn get_formula(&self) -> &str {
@@ -136,67 +124,48 @@ impl Cell {
     }
 }
 
-pub fn add_dependencies(
-    target_row: u32,
-    target_col: u32,
-    row: u32,
-    col: u32,
-    lock: Arc<Mutex<LockPool>>,
-    condvar: Arc<Condvar>,
-) {
-    let cell_lock = get_or_insert(lock.clone(), condvar.clone(), target_row, target_col);
-    let mut cell = cell_lock.lock().unwrap();
-    cell.add_dependency(row, col);
-    unlock!(lock, condvar, target_row, target_col, cell_lock, cell);
+pub fn add_dependencies(target: &str, cell: String, lock: Arc<RwLock<Sheet>>) {
+    let cell_lock = get_or_insert(lock.clone(), target);
+    let mut c = cell_lock.write().unwrap();
+    c.add_dependency(cell);
 }
 
-pub fn relieve_dependencies(
-    formula: String,
-    row: u32,
-    col: u32,
-    lock: Arc<Mutex<LockPool>>,
-    condvar: Arc<Condvar>,
-) {
+pub fn relieve_dependencies(formula: String, cell: String, lock: Arc<RwLock<Sheet>>) {
     spawn(move || {
         for i in CommandRunner::new(&formula).find_variables() {
             let regex =
                 lazy_regex::regex_captures!(r"([A-Z]+)(\d+)(_([A-Z]+)(\d+))?", i.as_str()).unwrap();
 
             if regex.3.is_empty() {
-                let (target_row, target_col) = (
-                    regex.2.parse::<u32>().unwrap() - 1,
-                    column_name_to_number(regex.1),
-                );
-                remove_dependencies(
-                    target_row,
-                    target_col,
-                    row,
-                    col,
-                    lock.clone(),
-                    condvar.clone(),
-                );
+                remove_dependencies(regex.1.to_string(), cell.clone(), lock.clone());
             } else if regex.1 == regex.4 {
-                let target_col = column_name_to_number(regex.1);
-                for i in regex.2.parse::<u32>().unwrap() - 1..=regex.5.parse::<u32>().unwrap() - 1 {
-                    remove_dependencies(i, target_col, row, col, lock.clone(), condvar.clone());
+                for j in regex.2.parse::<u32>().unwrap()..=regex.5.parse::<u32>().unwrap() {
+                    remove_dependencies(format!("{}{}", regex.1, j), cell.clone(), lock.clone());
                 }
             } else if regex.2 == regex.5 {
-                let target_row = regex.2.parse::<u32>().unwrap() - 1;
-                for i in column_name_to_number(regex.1)..=column_name_to_number(regex.4) {
-                    remove_dependencies(target_row, i, row, col, lock.clone(), condvar.clone());
+                for j in column_name_to_number(regex.1)..=column_name_to_number(regex.4) {
+                    remove_dependencies(
+                        format!("{}{}", column_number_to_name(j), regex.2),
+                        i.clone(),
+                        lock.clone(),
+                    );
                 }
             } else {
                 let (row1, col1) = (
-                    regex.2.parse::<u32>().unwrap() - 1,
+                    regex.2.parse::<u32>().unwrap(),
                     column_name_to_number(regex.1),
                 );
                 let (row2, col2) = (
-                    regex.5.parse::<u32>().unwrap() - 1,
+                    regex.5.parse::<u32>().unwrap(),
                     column_name_to_number(regex.4),
                 );
-                for i in row1..=row2 {
-                    for j in col1..=col2 {
-                        remove_dependencies(i, j, row, col, lock.clone(), condvar.clone());
+                for j in row1..=row2 {
+                    for k in col1..=col2 {
+                        remove_dependencies(
+                            format!("{}{}", column_number_to_name(k), j),
+                            cell.clone(),
+                            lock.clone(),
+                        );
                     }
                 }
             }
@@ -204,32 +173,22 @@ pub fn relieve_dependencies(
     });
 }
 
-pub fn remove_dependencies(
-    target_row: u32,
-    target_col: u32,
-    row: u32,
-    col: u32,
-    lock: Arc<Mutex<LockPool>>,
-    condvar: Arc<Condvar>,
-) {
-    let cell_lock = get_or_insert(lock.clone(), condvar.clone(), target_row, target_col);
-    let mut cell = cell_lock.lock().unwrap();
-    cell.remove_dependency(row, col);
-    unlock!(lock, condvar, target_row, target_col, cell_lock, cell);
+pub fn remove_dependencies(target: String, cell: String, lock: Arc<RwLock<Sheet>>) {
+    let cell_lock = get_or_insert(lock.clone(), &target);
+    let mut c = cell_lock.write().unwrap();
+    c.remove_dependency(cell);
 }
 
-pub fn update_dependencies(row: u32, col: u32, lock: Arc<Mutex<LockPool>>, condvar: Arc<Condvar>) {
-    let cell_lock = get_or_insert(lock.clone(), condvar.clone(), row, col);
+pub fn update_dependencies(cell: String, lock: Arc<RwLock<Sheet>>) {
+    let cell_lock = get_or_insert(lock.clone(), &cell);
 
     let binding = cell_lock.clone();
-    let cell = binding.lock().unwrap();
+    let cell = binding.read().unwrap();
     let runner = CommandRunner::new(cell.get_formula());
     drop(cell);
-    drop(binding);
 
-    let (hash, _) = get_dependency_value(&runner, lock.clone(), condvar.clone());
+    let (hash, _) = get_dependency_value(&runner, lock.clone());
     let value = runner.run(&hash);
-    let mut cell = cell_lock.lock().unwrap();
-    cell.update(value, lock.clone(), condvar.clone());
-    unlock!(lock, condvar, row, col, cell_lock, cell);
+    let mut cell = cell_lock.write().unwrap();
+    cell.update(value, lock.clone());
 }

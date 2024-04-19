@@ -191,8 +191,14 @@ pub fn update_dependencies(cell: String, lock: Arc<RwLock<Sheet>>) {
     let runner = CommandRunner::new(cell.get_formula());
     drop(cell);
 
-    let (hash, _) = get_dependency_value(&runner, lock.clone());
-    let value = runner.run(&hash);
+    let (hash, _, check) = get_dependency_value(&runner, lock.clone());
+
+    let value: CellValue = if check {
+        runner.run(&hash)
+    } else {
+        CellValue::Error("Reference a Error Cell.".to_string())
+    };
+
     let mut cell = cell_lock.write().unwrap();
     cell.update(value, lock);
 }

@@ -26,13 +26,15 @@ pub fn set_cell_value(
 ) -> Result<(), ConnectionError> {
     let time = SystemTime::now();
     let runner = CommandRunner::new(&formula);
-    let (hash, mut dependency) = get_dependency_value(&runner, lock.clone());
+    let (hash, mut dependency, check) = get_dependency_value(&runner, lock.clone());
 
     let value = if dependency.contains(&cell) {
         dependency.clear();
         CellValue::Error(format!("Cell {} is self-referential.", cell))
-    } else {
+    } else if check {
         runner.run(&hash)
+    } else {
+        CellValue::Error("Reference a Error Cell.".to_string())
     };
 
     let cell_lock = get_or_insert(lock.clone(), &cell);
@@ -45,9 +47,10 @@ pub fn set_cell_value(
 pub fn get_dependency_value(
     runner: &CommandRunner,
     lock: Arc<RwLock<Sheet>>,
-) -> (HashMap<String, CellArgument>, HashSet<String>) {
+) -> (HashMap<String, CellArgument>, HashSet<String>, bool) {
     let mut hash = HashMap::new();
     let mut record = HashSet::new();
+    let mut check = true;
 
     for i in runner.find_variables() {
         let regex =
@@ -57,13 +60,13 @@ pub fn get_dependency_value(
             i.clone(),
             if regex.3.is_empty() {
                 record.insert(i.clone());
-                CellArgument::Value(get_cell_value(i, lock.clone()))
+                CellArgument::Value(get_check_cell_value(i, lock.clone(), &mut check))
             } else if regex.1 == regex.4 {
                 let mut vec = vec![];
                 for i in regex.2.parse::<u32>().unwrap()..=regex.5.parse::<u32>().unwrap() {
                     let temp = format!("{}{}", regex.1, i);
                     record.insert(temp.clone());
-                    vec.push(get_cell_value(temp, lock.clone()));
+                    vec.push(get_check_cell_value(temp, lock.clone(), &mut check));
                 }
                 CellArgument::Vector(vec)
             } else if regex.2 == regex.5 {
@@ -71,7 +74,7 @@ pub fn get_dependency_value(
                 for i in column_name_to_number(regex.1)..=column_name_to_number(regex.4) {
                     let temp = format!("{}{}", column_number_to_name(i), regex.2);
                     record.insert(temp.clone());
-                    vec.push(get_cell_value(temp, lock.clone()));
+                    vec.push(get_check_cell_value(temp, lock.clone(), &mut check));
                 }
                 CellArgument::Vector(vec)
             } else {
@@ -90,7 +93,7 @@ pub fn get_dependency_value(
                     for j in col1..=col2 {
                         let temp = format!("{}{}", column_number_to_name(j), i);
                         record.insert(temp.clone());
-                        inner_vec.push(get_cell_value(temp, lock.clone()));
+                        inner_vec.push(get_check_cell_value(temp, lock.clone(), &mut check));
                     }
                     vec.push(inner_vec);
                 }
@@ -100,7 +103,15 @@ pub fn get_dependency_value(
         );
     }
 
-    (hash, record)
+    (hash, record, check)
+}
+
+pub fn get_check_cell_value(cell: String, lock: Arc<RwLock<Sheet>>, check: &mut bool) -> CellValue {
+    let cell = get_cell_value(cell, lock.clone());
+    if let CellValue::Error(_) = cell {
+        *check = false;
+    }
+    cell
 }
 
 pub fn get_cell_value(cell: String, lock: Arc<RwLock<Sheet>>) -> CellValue {

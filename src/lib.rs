@@ -10,6 +10,7 @@ use rsheet_lib::{
 };
 use std::sync::{Arc, RwLock};
 use std::thread::spawn;
+use rsheet_lib::cell_value::CellValue;
 
 #[derive(Debug)]
 pub enum Action {
@@ -34,7 +35,18 @@ where
                 set_cell_value(cell, value, lock)?;
             }
             Ok(Action::Get(cell)) => {
-                send.write_message(Reply::Value(cell.clone(), get_cell_value(cell, lock)))?;
+                match get_cell_value(cell.clone(), lock) {
+                    CellValue::Error(e) => {
+                        if e == "Reference a Error Cell." {
+                            send.write_message(Reply::Error("Reference a Error Cell.".to_string()))?;
+                        } else {
+                            send.write_message(Reply::Value(cell, CellValue::Error(e)))?;
+                        }
+                    },
+                    value => {
+                        send.write_message(Reply::Value(cell, value))?;
+                    }
+                }
             }
             Err(e) => {
                 send.write_message(Reply::Error(e.to_string()))?;

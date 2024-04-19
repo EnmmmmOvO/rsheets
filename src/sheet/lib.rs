@@ -26,7 +26,7 @@ pub fn set_cell_value(
 ) -> Result<(), ConnectionError> {
     let time = SystemTime::now();
     let runner = CommandRunner::new(&formula);
-    let (hash, mut dependency, check) = get_dependency_value(&runner, lock.clone());
+    let (hash, dependency, check) = get_dependency_value(&runner, lock.clone());
 
     let value = if check {
         runner.run(&hash)

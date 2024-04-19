@@ -95,10 +95,10 @@ impl Cell {
                 });
             }
         } else {
-            for i in &self.dependencies {
+            for i in self.dependencies.clone() {
                 let lock = lock.clone();
                 spawn(move || {
-                    update_dependencies(i.to_string(), lock);
+                    update_dependencies(i, lock);
                 });
             }
         }
@@ -107,10 +107,10 @@ impl Cell {
     pub fn update(&mut self, value: CellValue, lock: Arc<RwLock<Sheet>>) {
         self.value = value;
 
-        for i in &self.dependencies {
+        for i in self.dependencies.clone() {
             let lock = lock.clone();
             spawn(move || {
-                update_dependencies(i.to_string(), lock);
+                update_dependencies(i, lock);
             });
         }
     }

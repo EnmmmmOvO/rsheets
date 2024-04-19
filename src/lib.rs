@@ -63,8 +63,11 @@ where
             spawn(move || -> Result<(), ConnectionError> {
                 create_new_thread::<M>(recv, send, lock, condvar)
             });
+        } else {
+            break;
         }
     }
+    Ok(())
 }
 
 fn parse_input(input: &str) -> Result<Action, &str> {

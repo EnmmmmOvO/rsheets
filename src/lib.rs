@@ -25,13 +25,7 @@ fn create_new_thread<M>(
 where
     M: Manager + Send + 'static,
 {
-    loop {
-        let msg;
-        if let Ok(m) = recv.read_message() {
-            msg = m;
-        } else {
-            break;
-        }
+    while let Ok(msg) = recv.read_message() {
         info!("Just got message");
         let lock = lock.clone();
 

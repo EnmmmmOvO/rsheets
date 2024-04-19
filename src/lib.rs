@@ -40,14 +40,9 @@ where
             Ok(Action::Set(row, col, value)) => {
                 set_cell_value(row, col, value, lock, condvar)?;
             }
-            Ok(Action::Get(row, col, cell)) => match get_cell_value(row, col, lock, condvar) {
-                CellValue::Error(e) => {
-                    send.write_message(Reply::Error(e))?;
-                }
-                value => {
-                    send.write_message(Reply::Value(cell, value))?;
-                }
-            },
+            Ok(Action::Get(row, col, cell)) => {
+                send.write_message(Reply::Value(cell, get_cell_value(row, col, lock, condvar)))?;
+            }
             Err(e) => {
                 send.write_message(Reply::Error(e.to_string()))?;
             }

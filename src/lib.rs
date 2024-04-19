@@ -1,5 +1,7 @@
 mod sheet;
 
+use std::sync::Mutex;
+use std::sync::Arc;
 use crate::sheet::{create_lock_pool, get_cell_value, LockPool, set_cell_value};
 use lazy_regex::regex_captures;
 use log::info;
@@ -10,7 +12,7 @@ use rsheet_lib::{
     connect::{Manager, Reader, Writer},
     replies::Reply,
 };
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Condvar;
 use std::thread::spawn;
 
 #[derive(Debug)]
@@ -48,17 +50,14 @@ where
     }
 }
 
-pub fn start_server<M>(manager: Arc<Mutex<M>>) -> Result<(), ConnectionError>
+pub fn start_server<M>(mut manager: M) -> Result<(), ConnectionError>
 where
     M: Manager + Send + 'static
 {
     let (lock, condvar) = create_lock_pool();
 
     loop {
-        let manager_lock = manager.clone();
-        let mut m = manager_lock.lock().unwrap();
-
-        if let Ok((recv, send)) = m.accept_new_connection() {
+        if let Ok((recv, send)) = manager.accept_new_connection() {
             let lock = lock.clone();
             let condvar = condvar.clone();
             spawn(move || -> Result<(), ConnectionError> {

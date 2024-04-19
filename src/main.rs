@@ -1,5 +1,3 @@
-use std::sync::{Arc, Mutex};
-
 use clap::Parser;
 use rsheet::start_server;
 use rsheet_lib::connect::{resolve_address, ConnectionManager, TerminalManager, ConnectionError};
@@ -21,13 +19,13 @@ fn main() -> Result<(), ConnectionError> {
 
     if let Some(addr) = args.addr {
         let addr = resolve_address(&addr)?;
-        let manager = Arc::new(Mutex::new(ConnectionManager::launch(
+        let manager = ConnectionManager::launch(
             addr.ip(),
             addr.port(),
-        )));
+        );
         start_server(manager)
     } else {
-        let manager = Arc::new(Mutex::new(TerminalManager::launch(args.mark_mode)));
+        let manager = TerminalManager::launch(args.mark_mode);
         start_server(manager)
     }
 }

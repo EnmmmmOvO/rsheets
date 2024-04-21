@@ -1,6 +1,6 @@
 use crate::sheet::sheet_pool::{get_or_insert, Sheet};
 use petgraph::graph::{DiGraph, NodeIndex};
-use petgraph::visit::{Dfs, VisitMap, Visitable};
+use petgraph::visit::{VisitMap, Visitable};
 use rsheet_lib::cell_value::CellValue;
 use rsheet_lib::cells::{column_name_to_number, column_number_to_name};
 use rsheet_lib::command_runner::{CellArgument, CommandRunner};
@@ -171,15 +171,31 @@ pub fn get_cell_value(
 pub fn dfs_cycle_detect(graph: Arc<RwLock<DiGraph<String, ()>>>, start_node: NodeIndex) -> bool {
     let graph = graph.read().unwrap();
     let g = graph.deref();
-    let mut dfs = Dfs::new(&g, start_node);
-    let mut visited = graph.visit_map();
+    let mut visited = g.visit_map();
+    let mut recursion_stack = vec![];
 
-    while let Some(nx) = dfs.next(&g) {
-        if dfs.stack.contains(&nx) {
+    has_cycle(g, start_node, &mut visited, &mut recursion_stack)
+}
+
+fn has_cycle(
+    graph: &DiGraph<String, ()>,
+    node: NodeIndex,
+    visited: &mut dyn VisitMap<NodeIndex>,
+    recursion_stack: &mut Vec<NodeIndex>,
+) -> bool {
+    visited.visit(node);
+    recursion_stack.push(node);
+
+    for neighbor in graph.neighbors(node) {
+        if !visited.is_visited(&neighbor) {
+            if has_cycle(graph, neighbor, visited, recursion_stack) {
+                return true;
+            }
+        } else if recursion_stack.contains(&neighbor) {
             return true;
         }
-        visited.visit(nx);
     }
 
+    recursion_stack.pop();
     false
 }

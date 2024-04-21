@@ -45,13 +45,15 @@ to receive marks for the Design Questions.
     aborted.
 
 ## Question 5:
-    For updating dependencies, I employed a distinct thread from the set command to iteratively identify dependent
-    nodes in the graph, minimizing the duration for which the write lock on the cell modified by the set command is
-    held (src/sheet/cell.rs:102). Each dependent cell is then modified in separate child threads, allowing for
-    non-interfering concurrent updates and reducing the likelihood of delaying other processes due to sleep. Given
-    that self-dependency checks are conducted prior (src/sheet/cell.rs:93), therefore do not need care infinite loops,
-    no monitoring is set in the absence of self-dependency (src/sheet/graph.rs:62). For cases with self-dependency,
-    a hashset is employed to thwart the potential for endless updates (src/sheet/graph.rs:88).
+    I employed a distinct thread from the set command to iteratively identify dependent nodes of in the graph,
+    minimizing the duration for which the write lock on the cell modified by the set command is held
+    (src/sheet/cell.rs:102). Subsequently, for cells without self-dependency, each dependent unit is modified in a
+    separate sub-thread. After their values updated, the values they depend on are then adjusted, thus avoiding
+    potential errors brought on by sleep_then and lock contention. As for cells with self-dependency, there is no need
+    to consider these scenarios; they are all directly classified as self-dependent. For loop trap, given that
+    self-dependency checks are conducted prior (src/sheet/cell.rs:93), therefore do not need care infinite loops, no
+    monitoring is set in the absence of self-dependency (src/sheet/graph.rs:62). For cases with self-dependency, a
+    hashset is employed to thwart the potential for endless updates (src/sheet/graph.rs:88).
 
 # Questions to the Marker (OPTIONAL)
 

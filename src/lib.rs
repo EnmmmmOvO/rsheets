@@ -36,8 +36,8 @@ where
             }
             Ok(Action::Get(cell)) => match get_cell_value(cell.clone(), lock) {
                 CellValue::Error(e) => {
-                    if e == "Reference a Error Cell." {
-                        send.write_message(Reply::Error("Reference a Error Cell.".to_string()))?;
+                    if e == "Reference a Error Cell." || e.contains("is self-referential") {
+                        send.write_message(Reply::Error(e))?;
                     } else {
                         send.write_message(Reply::Value(cell, CellValue::Error(e)))?;
                     }

@@ -1,12 +1,11 @@
+use crate::sheet::cell::Cell;
 use crate::sheet::sheet_pool::{get_or_insert, Sheet};
 use petgraph::graph::{DiGraph, NodeIndex};
-use petgraph::visit::{VisitMap, Visitable};
 use rsheet_lib::cell_value::CellValue;
 use rsheet_lib::cells::{column_name_to_number, column_number_to_name};
 use rsheet_lib::command_runner::{CellArgument, CommandRunner};
 use rsheet_lib::connect::ConnectionError;
 use std::collections::{HashMap, HashSet};
-use std::ops::Deref;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
@@ -30,7 +29,7 @@ pub fn set_cell_value(
     cell: String,
     formula: String,
     sheet: Arc<RwLock<Sheet>>,
-    graph: Arc<RwLock<DiGraph<String, ()>>>,
+    graph: Arc<RwLock<DiGraph<Arc<RwLock<Cell>>, ()>>>,
 ) -> Result<(), ConnectionError> {
     let time = SystemTime::now();
     let runner = CommandRunner::new(&formula);
@@ -54,7 +53,7 @@ pub fn get_dependency_value(
     runner: CommandRunner,
     cell: &str,
     lock: Arc<RwLock<Sheet>>,
-    graph: Arc<RwLock<DiGraph<String, ()>>>,
+    graph: Arc<RwLock<DiGraph<Arc<RwLock<Cell>>, ()>>>,
 ) -> (CellValue, HashSet<NodeIndex>) {
     let mut hash = HashMap::new();
     let mut record = HashSet::new();
@@ -149,7 +148,7 @@ pub fn get_dependency_value(
 pub fn get_cell_value_and_node(
     cell: String,
     lock: Arc<RwLock<Sheet>>,
-    graph: Arc<RwLock<DiGraph<String, ()>>>,
+    graph: Arc<RwLock<DiGraph<Arc<RwLock<Cell>>, ()>>>,
 ) -> (CellValue, NodeIndex) {
     let cell_lock = get_or_insert(lock.clone(), &cell, graph);
 
@@ -160,42 +159,10 @@ pub fn get_cell_value_and_node(
 pub fn get_cell_value(
     cell: String,
     lock: Arc<RwLock<Sheet>>,
-    graph: Arc<RwLock<DiGraph<String, ()>>>,
+    graph: Arc<RwLock<DiGraph<Arc<RwLock<Cell>>, ()>>>,
 ) -> CellValue {
     let cell_lock = get_or_insert(lock.clone(), &cell, graph);
 
     let cell = cell_lock.read().unwrap();
     cell.get_value()
-}
-
-pub fn dfs_cycle_detect(graph: Arc<RwLock<DiGraph<String, ()>>>, start_node: NodeIndex) -> bool {
-    let graph = graph.read().unwrap();
-    let g = graph.deref();
-    let mut visited = g.visit_map();
-    let mut recursion_stack = vec![];
-
-    has_cycle(g, start_node, &mut visited, &mut recursion_stack)
-}
-
-fn has_cycle(
-    graph: &DiGraph<String, ()>,
-    node: NodeIndex,
-    visited: &mut dyn VisitMap<NodeIndex>,
-    recursion_stack: &mut Vec<NodeIndex>,
-) -> bool {
-    visited.visit(node);
-    recursion_stack.push(node);
-
-    for neighbor in graph.neighbors(node) {
-        if !visited.is_visited(&neighbor) {
-            if has_cycle(graph, neighbor, visited, recursion_stack) {
-                return true;
-            }
-        } else if recursion_stack.contains(&neighbor) {
-            return true;
-        }
-    }
-
-    recursion_stack.pop();
-    false
 }

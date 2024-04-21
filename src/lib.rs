@@ -1,6 +1,6 @@
 mod sheet;
 
-use crate::sheet::{get_cell_value, set_cell_value, Sheet};
+use crate::sheet::{get_cell_value, set_cell_value, Cell, Sheet};
 use lazy_regex::regex_captures;
 use log::info;
 use petgraph::graph::DiGraph;
@@ -23,7 +23,7 @@ fn create_new_thread<M>(
     mut recv: <<M as Manager>::ReaderWriter as ReaderWriter>::Reader,
     mut send: <<M as Manager>::ReaderWriter as ReaderWriter>::Writer,
     sheet: Arc<RwLock<Sheet>>,
-    graph: Arc<RwLock<DiGraph<String, ()>>>,
+    graph: Arc<RwLock<DiGraph<Arc<RwLock<Cell>>, ()>>>,
 ) -> Result<(), ConnectionError>
 where
     M: Manager + Send + 'static,

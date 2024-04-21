@@ -1,6 +1,6 @@
+use crate::sheet::graph::{dfs_cycle_recursive, dfs_recursive};
 use crate::sheet::lib::get_dependency_value;
-use crate::sheet::sheet_pool::get_or_insert;
-use crate::sheet::{lib::dfs_cycle_detect, sheet_pool::Sheet};
+use crate::sheet::{graph::dfs_cycle_detect, sheet_pool::Sheet};
 use petgraph::graph::{DiGraph, NodeIndex};
 use rsheet_lib::cell_value::CellValue;
 use rsheet_lib::command_runner::CommandRunner;
@@ -14,24 +14,28 @@ use std::time::SystemTime;
 pub struct Cell {
     value: CellValue,
     formula: String,
-    node: NodeIndex,
+    node: Option<NodeIndex>,
     cell: String,
     timestamp: SystemTime,
 }
 
 impl Cell {
-    pub fn new_blank(node: NodeIndex, cell: String) -> Cell {
+    pub fn new_blank(cell: String) -> Cell {
         Cell {
             value: CellValue::None,
             formula: String::new(),
-            node,
+            node: None,
             cell,
             timestamp: SystemTime::UNIX_EPOCH,
         }
     }
 
-    pub fn get_formula(&self) -> &str {
-        &self.formula
+    pub fn set_node(&mut self, node: NodeIndex) {
+        self.node = Some(node);
+    }
+
+    pub fn get_formula_and_cell(&self) -> (String, String) {
+        (self.formula.to_string(), self.cell.to_string())
     }
 
     pub fn set_value(
@@ -41,7 +45,7 @@ impl Cell {
         time: SystemTime,
         dependency: HashSet<NodeIndex>,
         sheet: Arc<RwLock<Sheet>>,
-        graph: Arc<RwLock<DiGraph<String, ()>>>,
+        graph: Arc<RwLock<DiGraph<Arc<RwLock<Cell>>, ()>>>,
     ) {
         if time <= self.timestamp {
             return;
@@ -63,7 +67,9 @@ impl Cell {
         if check {
             let mut g = graph_lock.write().unwrap();
             let g_mut = g.deref_mut();
-            g_mut.retain_edges(|graph, edge| graph.edge_endpoints(edge).unwrap().1 != self.node);
+            g_mut.retain_edges(|graph, edge| {
+                graph.edge_endpoints(edge).unwrap().1 != self.node.unwrap()
+            });
             drop(g);
         }
 
@@ -75,16 +81,16 @@ impl Cell {
             let mut g = graph_lock.write().unwrap();
             let g_mut = g.deref_mut();
             for i in dependency {
-                if i == self.node {
+                if i == self.node.unwrap() {
                     check = true;
                     continue;
                 }
 
-                g_mut.add_edge(i, self.node, ());
+                g_mut.add_edge(i, self.node.unwrap(), ());
             }
             drop(g);
 
-            check = check || dfs_cycle_detect(graph.clone(), self.node);
+            check = check || dfs_cycle_detect(graph.clone(), self.node.unwrap());
 
             self.value = if check {
                 CellValue::Error(format!("Cell {} is self-referential", self.cell))
@@ -93,9 +99,7 @@ impl Cell {
             };
         }
 
-        println!("{}", check);
-
-        let node = self.node;
+        let node = self.node.unwrap();
         if check {
             let mut set = HashSet::new();
             set.insert(node);
@@ -122,80 +126,21 @@ impl Cell {
     }
 
     pub fn get_value_and_node(&self) -> (CellValue, NodeIndex) {
-        (self.value.clone(), self.node)
-    }
-}
-
-pub fn dfs_recursive(
-    graph_lock: Arc<RwLock<DiGraph<String, ()>>>,
-    node_index: NodeIndex,
-    sheet: Arc<RwLock<Sheet>>,
-) {
-    let binding = graph_lock.clone();
-    let graph = binding.read().unwrap();
-    let temp = graph
-        .neighbors(node_index)
-        .map(|x| (x, graph.node_weight(x).unwrap().to_string()))
-        .collect::<Vec<_>>();
-    drop(graph);
-
-    for (neighbor, cell) in temp {
-        let sheet = sheet.clone();
-        let graph_lock = graph_lock.clone();
-        spawn(move || {
-            update_dependencies(sheet.clone(), cell, graph_lock.clone(), false);
-            dfs_recursive(graph_lock.clone(), neighbor, sheet.clone());
-        });
-    }
-}
-
-pub fn dfs_cycle_recursive(
-    graph_lock: Arc<RwLock<DiGraph<String, ()>>>,
-    node_index: NodeIndex,
-    visited: &mut HashSet<NodeIndex>,
-    sheet: Arc<RwLock<Sheet>>,
-) {
-    let binding = graph_lock.clone();
-    let graph = binding.read().unwrap();
-    let temp = graph
-        .neighbors(node_index)
-        .map(|x| (x, graph.node_weight(x).unwrap().to_string()))
-        .collect::<Vec<_>>();
-    drop(graph);
-
-    for (neighbor, cell) in temp {
-        if visited.contains(&neighbor) {
-            continue;
-        }
-        visited.insert(neighbor);
-        let sheet = sheet.clone();
-        let graph_temp = graph_lock.clone();
-        let sheet_temp = sheet.clone();
-        spawn(move || {
-            update_dependencies(sheet_temp, cell, graph_temp, true);
-        });
-        dfs_cycle_recursive(graph_lock.clone(), neighbor, visited, sheet);
+        (self.value.clone(), self.node.unwrap())
     }
 }
 
 pub fn update_dependencies(
+    cell_lock: Arc<RwLock<Cell>>,
     lock: Arc<RwLock<Sheet>>,
-    cell: String,
-    graph: Arc<RwLock<DiGraph<String, ()>>>,
-    err: bool,
+    graph: Arc<RwLock<DiGraph<Arc<RwLock<Cell>>, ()>>>,
 ) {
-    let cell_lock = get_or_insert(lock.clone(), &cell, graph.clone());
-
-    if err {
-        let mut cell = cell_lock.write().unwrap();
-        cell.update_err();
-        return;
-    }
-
     let binding = cell_lock.clone();
     let c = binding.read().unwrap();
-    let runner = CommandRunner::new(c.get_formula());
+    let (formula, cell) = c.get_formula_and_cell();
     drop(c);
+
+    let runner = CommandRunner::new(&formula);
 
     let (value, _) = get_dependency_value(runner, &cell, lock.clone(), graph.clone());
 

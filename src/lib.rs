@@ -3,6 +3,7 @@ mod sheet;
 use crate::sheet::{get_cell_value, set_cell_value, Sheet};
 use lazy_regex::regex_captures;
 use log::info;
+use petgraph::graph::DiGraph;
 use rsheet_lib::cell_value::CellValue;
 use rsheet_lib::connect::{ConnectionError, ReaderWriter};
 use rsheet_lib::{
@@ -21,20 +22,22 @@ pub enum Action {
 fn create_new_thread<M>(
     mut recv: <<M as Manager>::ReaderWriter as ReaderWriter>::Reader,
     mut send: <<M as Manager>::ReaderWriter as ReaderWriter>::Writer,
-    lock: Arc<RwLock<Sheet>>,
+    sheet: Arc<RwLock<Sheet>>,
+    graph: Arc<RwLock<DiGraph<String, ()>>>,
 ) -> Result<(), ConnectionError>
 where
     M: Manager + Send + 'static,
 {
     while let Ok(msg) = recv.read_message() {
         info!("Just got message");
-        let lock = lock.clone();
+        let sheet = sheet.clone();
+        let graph = graph.clone();
 
         match parse_input(&msg) {
             Ok(Action::Set(cell, value)) => {
-                set_cell_value(cell, value, lock)?;
+                set_cell_value(cell, value, sheet, graph)?;
             }
-            Ok(Action::Get(cell)) => match get_cell_value(cell.clone(), lock) {
+            Ok(Action::Get(cell)) => match get_cell_value(cell.clone(), sheet, graph) {
                 CellValue::Error(e) => {
                     if e == "Reference a Error Cell." || e.contains("is self-referential") {
                         send.write_message(Reply::Error(e))?;
@@ -58,14 +61,18 @@ pub fn start_server<M>(mut manager: M) -> Result<(), ConnectionError>
 where
     M: Manager + Send + 'static,
 {
-    let lock = Arc::new(RwLock::new(Sheet::new()));
+    let sheet = Arc::new(RwLock::new(Sheet::new()));
+    let graph = Arc::new(RwLock::new(DiGraph::new()));
+
     let mut record = vec![];
     while let Ok((recv, send)) = manager.accept_new_connection() {
-        let lock = lock.clone();
+        let sheet = sheet.clone();
+        let graph = graph.clone();
         record.push(spawn(move || -> Result<(), ConnectionError> {
-            create_new_thread::<M>(recv, send, lock)
+            create_new_thread::<M>(recv, send, sheet, graph)
         }));
     }
+
     for handle in record {
         handle.join().unwrap()?;
     }

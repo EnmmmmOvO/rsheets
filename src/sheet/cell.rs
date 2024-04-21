@@ -1,15 +1,12 @@
-use crate::sheet::dependency::{check_or_insert_normal, Dependency, Status};
-use crate::sheet::{
-    lib::get_dependency_value,
-    lock_pool::{get_or_insert, Sheet},
-};
+use crate::sheet::lib::get_dependency_value;
+use crate::sheet::sheet_pool::get_or_insert;
+use crate::sheet::{lib::dfs_cycle_detect, sheet_pool::Sheet};
+use petgraph::graph::{DiGraph, NodeIndex};
 use rsheet_lib::cell_value::CellValue;
-use rsheet_lib::{
-    cells::{column_name_to_number, column_number_to_name},
-    command_runner::CommandRunner,
-};
+use rsheet_lib::command_runner::CommandRunner;
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex, RwLock};
+use std::ops::DerefMut;
+use std::sync::{Arc, RwLock};
 use std::thread::spawn;
 use std::time::SystemTime;
 
@@ -17,18 +14,24 @@ use std::time::SystemTime;
 pub struct Cell {
     value: CellValue,
     formula: String,
-    dependencies: HashSet<String>,
+    node: NodeIndex,
+    cell: String,
     timestamp: SystemTime,
 }
 
 impl Cell {
-    pub fn new_blank() -> Cell {
+    pub fn new_blank(node: NodeIndex, cell: String) -> Cell {
         Cell {
             value: CellValue::None,
             formula: String::new(),
-            dependencies: HashSet::new(),
+            node,
+            cell,
             timestamp: SystemTime::UNIX_EPOCH,
         }
+    }
+
+    pub fn get_formula(&self) -> &str {
+        &self.formula
     }
 
     pub fn set_value(
@@ -36,9 +39,9 @@ impl Cell {
         formula: String,
         value: CellValue,
         time: SystemTime,
-        dependency: HashSet<String>,
-        cell: String,
-        lock: Arc<RwLock<Sheet>>,
+        dependency: HashSet<NodeIndex>,
+        sheet: Arc<RwLock<Sheet>>,
+        graph: Arc<RwLock<DiGraph<String, ()>>>,
     ) {
         if time <= self.timestamp {
             return;
@@ -52,175 +55,121 @@ impl Cell {
             }
         }
 
+        self.formula = formula;
+        self.timestamp = time;
+
+        let graph_lock = graph.clone();
+
         if check {
-            relieve_dependencies(self.formula.clone(), cell.clone(), lock.clone());
+            let mut g = graph_lock.write().unwrap();
+            let g_mut = g.deref_mut();
+            g_mut.retain_edges(|graph, edge| graph.edge_endpoints(edge).unwrap().1 != self.node);
+            drop(g);
         }
 
-        self.timestamp = time;
-        self.formula = formula;
-
-        let mut check = false;
+        check = false;
 
         if CellValue::Error("Could not cast Rhai return back to Cell Value.".to_string()) == value {
             self.value = value;
         } else {
+            let mut g = graph_lock.write().unwrap();
+            let g_mut = g.deref_mut();
             for i in dependency {
-                let cell = cell.clone();
-
-                if i == cell {
+                if i == self.node {
                     check = true;
                     continue;
-                } else if self.dependencies.contains(&i) {
-                    check = true;
                 }
-                let lock = lock.clone();
 
-                spawn(move || {
-                    add_dependencies(&i, cell, lock);
-                });
+                g_mut.add_edge(i, self.node, ());
             }
+            drop(g);
+
+            check = check || dfs_cycle_detect(graph.clone(), self.node);
 
             self.value = if check {
-                CellValue::Error(format!("Cell {cell} is self-referential",))
+                CellValue::Error(format!("Cell {} is self-referential", self.cell))
             } else {
                 value
             };
         }
 
-        let dependency: Arc<Mutex<Dependency>> = if check {
-            Dependency::new_err()
-        } else {
-            Dependency::new(cell.clone())
-        };
-
-        for i in self.dependencies.clone() {
-            let lock = lock.clone();
-            let dependency = dependency.clone();
-            spawn(move || {
-                update_dependencies(i, lock, dependency);
-            });
-        }
+        let node = self.node;
+        spawn(move || {
+            let mut set = HashSet::new();
+            set.insert(node);
+            dfs_recursive(graph_lock, node, &mut set, check, sheet);
+        });
     }
 
-    pub fn update(&mut self, value: CellValue) -> HashSet<String> {
+    pub fn update(&mut self, value: CellValue) {
         self.value = value;
-        self.dependencies.clone()
     }
 
-    pub fn update_err(&mut self, target: String) -> HashSet<String> {
-        self.value = CellValue::Error(format!("Cell {target} is self-referential",));
-        self.dependencies.clone()
+    pub fn update_err(&mut self) {
+        self.value = CellValue::Error(format!("Cell {} is self-referential", self.cell));
     }
 
     pub fn get_value(&self) -> CellValue {
         self.value.clone()
     }
 
-    pub fn add_dependency(&mut self, cell: String) {
-        self.dependencies.insert(cell);
-    }
-
-    pub fn remove_dependency(&mut self, cell: &str) {
-        self.dependencies.retain(|x| x != cell);
-    }
-
-    pub fn get_formula(&self) -> &str {
-        &self.formula
+    pub fn get_value_and_node(&self) -> (CellValue, NodeIndex) {
+        (self.value.clone(), self.node)
     }
 }
 
-pub fn add_dependencies(target: &str, cell: String, lock: Arc<RwLock<Sheet>>) {
-    let cell_lock = get_or_insert(lock.clone(), target);
-    let mut c = cell_lock.write().unwrap();
-    c.add_dependency(cell.clone());
-}
+pub fn dfs_recursive(
+    graph_lock: Arc<RwLock<DiGraph<String, ()>>>,
+    node_index: NodeIndex,
+    visited: &mut HashSet<NodeIndex>,
+    err: bool,
+    sheet: Arc<RwLock<Sheet>>,
+) {
+    let binding = graph_lock.clone();
+    let graph = binding.read().unwrap();
+    let temp = graph
+        .neighbors(node_index)
+        .map(|x| (x, graph.node_weight(x).unwrap().to_string()))
+        .collect::<Vec<_>>();
+    drop(graph);
 
-pub fn relieve_dependencies(formula: String, cell: String, lock: Arc<RwLock<Sheet>>) {
-    spawn(move || {
-        for i in CommandRunner::new(&formula).find_variables() {
-            let regex =
-                lazy_regex::regex_captures!(r"([A-Z]+)(\d+)(_([A-Z]+)(\d+))?", i.as_str()).unwrap();
-
-            if regex.3.is_empty() {
-                remove_dependencies(regex.1.to_string(), &cell, lock.clone());
-            } else if regex.1 == regex.4 {
-                for j in regex.2.parse::<u32>().unwrap()..=regex.5.parse::<u32>().unwrap() {
-                    remove_dependencies(format!("{}{}", regex.1, j), &cell, lock.clone());
-                }
-            } else if regex.2 == regex.5 {
-                for j in column_name_to_number(regex.1)..=column_name_to_number(regex.4) {
-                    remove_dependencies(
-                        format!("{}{}", column_number_to_name(j), regex.2),
-                        &cell,
-                        lock.clone(),
-                    );
-                }
-            } else {
-                let (row1, col1) = (
-                    regex.2.parse::<u32>().unwrap(),
-                    column_name_to_number(regex.1),
-                );
-                let (row2, col2) = (
-                    regex.5.parse::<u32>().unwrap(),
-                    column_name_to_number(regex.4),
-                );
-                for j in row1..=row2 {
-                    for k in col1..=col2 {
-                        remove_dependencies(
-                            format!("{}{}", column_number_to_name(k), j),
-                            &cell,
-                            lock.clone(),
-                        );
-                    }
-                }
-            }
+    for (neighbor, cell) in temp {
+        let sheet = sheet.clone();
+        if !visited.contains(&neighbor) {
+            println!("Updating {}", cell);
+            visited.insert(neighbor);
+            let graph_temp = graph_lock.clone();
+            let sheet_temp = sheet.clone();
+            let err_temp = err;
+            spawn(move || {
+                update_dependencies(sheet_temp, cell, graph_temp, err_temp);
+            });
+            dfs_recursive(graph_lock.clone(), neighbor, visited, err, sheet);
         }
-    });
-}
-
-pub fn remove_dependencies(target: String, cell: &str, lock: Arc<RwLock<Sheet>>) {
-    let cell_lock = get_or_insert(lock.clone(), &target);
-    let mut c = cell_lock.write().unwrap();
-    c.remove_dependency(cell);
+    }
 }
 
 pub fn update_dependencies(
-    cell: String,
     lock: Arc<RwLock<Sheet>>,
-    dependency: Arc<Mutex<Dependency>>,
+    cell: String,
+    graph: Arc<RwLock<DiGraph<String, ()>>>,
+    err: bool,
 ) {
-    match check_or_insert_normal(dependency.clone(), cell.clone()) {
-        Status::True => {
-            let cell_lock = get_or_insert(lock.clone(), &cell);
+    let cell_lock = get_or_insert(lock.clone(), &cell, graph.clone());
 
-            let binding = cell_lock.clone();
-            let c = binding.read().unwrap();
-            let runner = CommandRunner::new(c.get_formula());
-            drop(c);
-
-            let (value, _) = get_dependency_value(runner, &cell, lock.clone());
-
-            let mut cell = cell_lock.write().unwrap();
-            for i in cell.update(value) {
-                let lock = lock.clone();
-                let dependency = dependency.clone();
-                spawn(move || {
-                    update_dependencies(i, lock, dependency);
-                });
-            }
-        }
-        Status::Err => {
-            let cell_lock = get_or_insert(lock.clone(), &cell);
-            let mut c = cell_lock.write().unwrap();
-
-            for i in c.update_err(cell) {
-                let lock = lock.clone();
-                let dependency = dependency.clone();
-                spawn(move || {
-                    update_dependencies(i, lock, dependency);
-                });
-            }
-        }
-        Status::ErrChanged => {}
+    if err {
+        let mut cell = cell_lock.write().unwrap();
+        cell.update_err();
+        return;
     }
+
+    let binding = cell_lock.clone();
+    let c = binding.read().unwrap();
+    let runner = CommandRunner::new(c.get_formula());
+    drop(c);
+
+    let (value, _) = get_dependency_value(runner, &cell, lock.clone(), graph.clone());
+
+    let mut cell = cell_lock.write().unwrap();
+    cell.update(value);
 }

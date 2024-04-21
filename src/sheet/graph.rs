@@ -56,12 +56,12 @@ pub fn dfs_recursive(
     drop(graph);
 
     for (neighbor, cell) in temp {
-        let sheet = sheet.clone();
-        let graph_lock = graph_lock.clone();
+        let sheet_temp = sheet.clone();
+        let graph_temp = graph_lock.clone();
         spawn(move || {
-            update_dependencies(cell, sheet.clone(), graph_lock.clone());
-            dfs_recursive(graph_lock.clone(), neighbor, sheet.clone());
+            update_dependencies(cell, sheet_temp.clone(), graph_temp.clone());
         });
+        dfs_recursive(graph_lock.clone(), neighbor, sheet.clone());
     }
 }
 

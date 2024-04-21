@@ -6,14 +6,52 @@ These questions are listed in the spec, and you must fill them out
 to receive marks for the Design Questions.
 
 ## Question 1:
+    In my implementation (src/lib.rs:17), I employed an enum to encapsulate the components derived from parsing
+    Regular Expressions,where the Set command is decomposed into <cell> and <value>, and the Get command into
+    <cell>. Errors are thrown if the patterns do not conform. An alternative method could involve using a struct or
+    directly returning a tuple. Compared to a struct, using an enum with a match statement facilitates the
+    decomposition without the necessity to define each component's variable name, effectively simplifying the code.
+    In contrast to a tuple, where get and set might only be distinguishable as boolean values, enums enhance
+    readability and maintainability.
 
 ## Question 2:
+    I utilized Regular Expressions to parse the results obtained from find_variable (src/sheet/lib.rs:62), classifying
+    as Scalar if no underscore is present, as Vector if either column or row parts are identical, and as Matrix
+    if both column and row parts differ. For Vector, use enumeration to get all of the possible data between
+    different columns or rows, whereas matrices involve a nested enumeration of both. A preferable modification would
+    be to always employ double-layered nested enumeration; if columns or rows are identical, output a single-layered
+    Vector, and for differing columns and rows, output a Matrix. In addition, for enumerating the column interval
+    from A to Z, I employed the methods column_name_to_number and column_number_to_name, which to some extent limited
+    the range of values for cells. There should be a better approach to handle this.
 
 ## Question 3:
+    All cells (src/sheet/sheet_pool.rs:55), sheet pool (src/sheet/lib.rs:64) and the dependency graph
+    (src/sheet/lib.rs:65), use Arc and read-write lock structures. Transitioning to a single-threaded design would
+    involve removing both Arc and read-write locks, eliminating the locks for each cell within the sheet pool.
+    Modifications to a specific cell and its dependencies would be directly made using &mut sheet, without concern
+    for interference from other processes due to the single-threaded nature. Similarly, configurations and retrievals
+    in the graph pool would follow suit. For the operations for 'set' and the presence of 'sleep_then', there is a
+    possibility that after entering one command, one must wait for all data updates to be completed before entering
+    the next command. However, this also prevents the possibility of data inconsistencies in a concurrent environment.
 
 ## Question 4:
+    To manage this, I implemented a timestamp mechanism and restore in Cell struct (src/sheet/cell.rs:19). When
+    initializing the cell, I set the timestamp to UNIX_EPOCH to ensure that all subsequent timestamps are greater than
+    it (src/sheet/cell.rs:29). Before the CommandRunner executed the resultant operations, I record the local timestamp
+    (src/sheet/lib.rs:34). Prior to modifying the data, I check the record timestamp in the cell; (src/sheet/cell.rs:50)
+    if the current timestamp of the table is less than that held by the thread, it indicates that the data within
+    this thread is the most up-to-date, thereby permitting modifications to proceed and update the timestamp.
+    Conversely, if more recent data has been updated, the older data becomes obsolete and the operation is immediately
+    aborted.
 
 ## Question 5:
+    For updating dependencies, I employed a distinct thread from the set command to iteratively identify dependent
+    nodes in the graph, minimizing the duration for which the write lock on the cell modified by the set command is
+    held (src/sheet/cell.rs:102). Each dependent cell is then modified in separate child threads, allowing for
+    non-interfering concurrent updates and reducing the likelihood of delaying other processes due to sleep. Given
+    that self-dependency checks are conducted prior (src/sheet/cell.rs:93), therefore do not need care infinite loops,
+    no monitoring is set in the absence of self-dependency (src/sheet/graph.rs:62). For cases with self-dependency,
+    a hashset is employed to thwart the potential for endless updates (src/sheet/graph.rs:88).
 
 # Questions to the Marker (OPTIONAL)
 
@@ -21,7 +59,10 @@ Remember: you don't have to fill these out; but if
 you want to get feedback on a particular element of
 your code; you can!
 
-1.
+1. As many people have commented on Rust, it is indeed a somewhat complex language to learn, but once mastered, it is
+   perceived as fascinating and efficient. As a teacher of Rust, how do you view the comparison between C or C++ and
+   Rust? In terms of AI, particularly in fields like embedded vision, C++ has been a superior choice. Do you think
+   Rust can be competitive in this area?
 
 2.
 

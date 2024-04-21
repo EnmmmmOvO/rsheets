@@ -93,12 +93,20 @@ impl Cell {
             };
         }
 
+        println!("{}", check);
+
         let node = self.node;
-        spawn(move || {
+        if check {
             let mut set = HashSet::new();
             set.insert(node);
-            dfs_recursive(graph_lock, node, &mut set, check, sheet);
-        });
+            spawn(move || {
+                dfs_cycle_recursive(graph_lock, node, &mut set, sheet);
+            });
+        } else {
+            spawn(move || {
+                dfs_recursive(graph_lock, node, sheet);
+            });
+        }
     }
 
     pub fn update(&mut self, value: CellValue) {
@@ -121,8 +129,6 @@ impl Cell {
 pub fn dfs_recursive(
     graph_lock: Arc<RwLock<DiGraph<String, ()>>>,
     node_index: NodeIndex,
-    visited: &mut HashSet<NodeIndex>,
-    err: bool,
     sheet: Arc<RwLock<Sheet>>,
 ) {
     let binding = graph_lock.clone();
@@ -135,16 +141,40 @@ pub fn dfs_recursive(
 
     for (neighbor, cell) in temp {
         let sheet = sheet.clone();
-        if !visited.contains(&neighbor) {
-            visited.insert(neighbor);
-            let graph_temp = graph_lock.clone();
-            let sheet_temp = sheet.clone();
-            let err_temp = err;
-            spawn(move || {
-                update_dependencies(sheet_temp, cell, graph_temp, err_temp);
-            });
-            dfs_recursive(graph_lock.clone(), neighbor, visited, err, sheet);
+        let graph_lock = graph_lock.clone();
+        spawn(move || {
+            update_dependencies(sheet.clone(), cell, graph_lock.clone(), false);
+            dfs_recursive(graph_lock.clone(), neighbor, sheet.clone());
+        });
+    }
+}
+
+pub fn dfs_cycle_recursive(
+    graph_lock: Arc<RwLock<DiGraph<String, ()>>>,
+    node_index: NodeIndex,
+    visited: &mut HashSet<NodeIndex>,
+    sheet: Arc<RwLock<Sheet>>,
+) {
+    let binding = graph_lock.clone();
+    let graph = binding.read().unwrap();
+    let temp = graph
+        .neighbors(node_index)
+        .map(|x| (x, graph.node_weight(x).unwrap().to_string()))
+        .collect::<Vec<_>>();
+    drop(graph);
+
+    for (neighbor, cell) in temp {
+        if visited.contains(&neighbor) {
+            continue;
         }
+        visited.insert(neighbor);
+        let sheet = sheet.clone();
+        let graph_temp = graph_lock.clone();
+        let sheet_temp = sheet.clone();
+        spawn(move || {
+            update_dependencies(sheet_temp, cell, graph_temp, true);
+        });
+        dfs_cycle_recursive(graph_lock.clone(), neighbor, visited, sheet);
     }
 }
 

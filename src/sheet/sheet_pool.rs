@@ -20,7 +20,12 @@ impl Sheet {
         self.map.get(cell).cloned()
     }
 
-    pub fn insert(&mut self, cell: &str, new: Arc<RwLock<Cell>>, graph: Arc<RwLock<Graph<Arc<RwLock<Cell>>, ()>>>) -> Arc<RwLock<Cell>> {
+    pub fn insert(
+        &mut self,
+        cell: &str,
+        new: Arc<RwLock<Cell>>,
+        graph: Arc<RwLock<Graph<Arc<RwLock<Cell>>, ()>>>,
+    ) -> Arc<RwLock<Cell>> {
         if let Some(lock) = self.map.get(cell) {
             spawn(move || {
                 let node = new.read().unwrap().get_value_and_node().1;

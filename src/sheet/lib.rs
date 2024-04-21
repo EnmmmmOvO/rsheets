@@ -26,13 +26,7 @@ pub fn set_cell_value(
 ) -> Result<(), ConnectionError> {
     let time = SystemTime::now();
     let runner = CommandRunner::new(&formula);
-    let (hash, dependency, check) = get_dependency_value(&runner, lock.clone());
-
-    let value = if check {
-        runner.run(&hash)
-    } else {
-        CellValue::Error("Reference a Error Cell.".to_string())
-    };
+    let (value, dependency) = get_dependency_value(runner, &cell, lock.clone());
 
     let cell_lock = get_or_insert(lock.clone(), &cell);
     let mut c = cell_lock.write().unwrap();
@@ -42,12 +36,13 @@ pub fn set_cell_value(
 }
 
 pub fn get_dependency_value(
-    runner: &CommandRunner,
+    runner: CommandRunner,
+    cell: &str,
     lock: Arc<RwLock<Sheet>>,
-) -> (HashMap<String, CellArgument>, HashSet<String>, bool) {
+) -> (CellValue, HashSet<String>) {
     let mut hash = HashMap::new();
     let mut record = HashSet::new();
-    let mut check = true;
+    let mut check = 0;
 
     for i in runner.find_variables() {
         let regex =
@@ -63,6 +58,9 @@ pub fn get_dependency_value(
                 for i in regex.2.parse::<u32>().unwrap()..=regex.5.parse::<u32>().unwrap() {
                     let temp = format!("{}{}", regex.1, i);
                     record.insert(temp.clone());
+                    if check != 0 {
+                        continue;
+                    }
                     vec.push(get_check_cell_value(temp, lock.clone(), &mut check));
                 }
                 CellArgument::Vector(vec)
@@ -71,6 +69,9 @@ pub fn get_dependency_value(
                 for i in column_name_to_number(regex.1)..=column_name_to_number(regex.4) {
                     let temp = format!("{}{}", column_number_to_name(i), regex.2);
                     record.insert(temp.clone());
+                    if check != 0 {
+                        continue;
+                    }
                     vec.push(get_check_cell_value(temp, lock.clone(), &mut check));
                 }
                 CellArgument::Vector(vec)
@@ -90,6 +91,9 @@ pub fn get_dependency_value(
                     for j in col1..=col2 {
                         let temp = format!("{}{}", column_number_to_name(j), i);
                         record.insert(temp.clone());
+                        if check != 0 {
+                            continue;
+                        }
                         inner_vec.push(get_check_cell_value(temp, lock.clone(), &mut check));
                     }
                     vec.push(inner_vec);
@@ -100,15 +104,28 @@ pub fn get_dependency_value(
         );
     }
 
-    (hash, record, check)
+    (
+        match check {
+            0 => runner.run(&hash),
+            1 => CellValue::Error(format!("Cell {cell} is self-referential")),
+            _ => CellValue::Error("Reference a Error Cell.".to_string()),
+        },
+        record,
+    )
 }
 
-pub fn get_check_cell_value(cell: String, lock: Arc<RwLock<Sheet>>, check: &mut bool) -> CellValue {
-    let cell = get_cell_value(cell, lock.clone());
-    if let CellValue::Error(_) = cell {
-        *check = false;
+pub fn get_check_cell_value(cell: String, lock: Arc<RwLock<Sheet>>, check: &mut i32) -> CellValue {
+    match get_cell_value(cell, lock.clone()) {
+        CellValue::Error(e) => {
+            if e.contains("is self-referential") {
+                *check = 1;
+            } else {
+                *check = 2;
+            }
+            CellValue::Error(e)
+        }
+        value => value,
     }
-    cell
 }
 
 pub fn get_cell_value(cell: String, lock: Arc<RwLock<Sheet>>) -> CellValue {

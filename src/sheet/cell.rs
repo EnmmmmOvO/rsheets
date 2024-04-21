@@ -1,3 +1,4 @@
+use crate::sheet::dependency::{check_or_insert_normal, Dependency, Status};
 use crate::sheet::{
     lib::get_dependency_value,
     lock_pool::{get_or_insert, Sheet},
@@ -8,7 +9,7 @@ use rsheet_lib::{
     command_runner::CommandRunner,
 };
 use std::collections::HashSet;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread::spawn;
 use std::time::SystemTime;
 
@@ -86,51 +87,29 @@ impl Cell {
             };
         }
 
-        if check {
-            for j in self.dependencies.clone() {
-                let cell = cell.clone();
-                let lock = lock.clone();
-                spawn(move || {
-                    update_err_dependencies(j, lock, cell.clone());
-                });
-            }
+        let dependency: Arc<Mutex<Dependency>> = if check {
+            Dependency::new_err()
         } else {
-            for i in self.dependencies.clone() {
-                let lock = lock.clone();
-                spawn(move || {
-                    update_dependencies(i, lock);
-                });
-            }
-        }
-    }
-
-    pub fn update(&mut self, value: CellValue, lock: Arc<RwLock<Sheet>>) {
-        self.value = value;
+            Dependency::new(cell.clone())
+        };
 
         for i in self.dependencies.clone() {
             let lock = lock.clone();
+            let dependency = dependency.clone();
             spawn(move || {
-                update_dependencies(i, lock);
+                update_dependencies(i, lock, dependency);
             });
         }
     }
 
-    pub fn update_err(&mut self, lock: Arc<RwLock<Sheet>>, target: String, cell: String) {
-        if self.dependencies.contains(&cell) {
-            self.value = CellValue::Error(format!("Cell {target} is self-referential",));
-        } else {
-            self.value = CellValue::Error("Reference a Error Cell.".to_string());
-        }
+    pub fn update(&mut self, value: CellValue) -> HashSet<String> {
+        self.value = value;
+        self.dependencies.clone()
+    }
 
-        for i in self.dependencies.clone() {
-            let cell = cell.clone();
-            if i != cell {
-                let lock = lock.clone();
-                spawn(move || {
-                    update_err_dependencies(i, lock, cell.clone());
-                });
-            }
-        }
+    pub fn update_err(&mut self, target: String) -> HashSet<String> {
+        self.value = CellValue::Error(format!("Cell {target} is self-referential",));
+        self.dependencies.clone()
     }
 
     pub fn get_value(&self) -> CellValue {
@@ -205,28 +184,43 @@ pub fn remove_dependencies(target: String, cell: &str, lock: Arc<RwLock<Sheet>>)
     c.remove_dependency(cell);
 }
 
-pub fn update_err_dependencies(target_cell: String, lock: Arc<RwLock<Sheet>>, cell: String) {
-    let cell_lock = get_or_insert(lock.clone(), &target_cell);
-    let mut c = cell_lock.write().unwrap();
-    c.update_err(lock.clone(), target_cell, cell)
-}
+pub fn update_dependencies(
+    cell: String,
+    lock: Arc<RwLock<Sheet>>,
+    dependency: Arc<Mutex<Dependency>>,
+) {
+    match check_or_insert_normal(dependency.clone(), cell.clone()) {
+        Status::True => {
+            let cell_lock = get_or_insert(lock.clone(), &cell);
 
-pub fn update_dependencies(cell: String, lock: Arc<RwLock<Sheet>>) {
-    let cell_lock = get_or_insert(lock.clone(), &cell);
+            let binding = cell_lock.clone();
+            let c = binding.read().unwrap();
+            let runner = CommandRunner::new(c.get_formula());
+            drop(c);
 
-    let binding = cell_lock.clone();
-    let cell = binding.read().unwrap();
-    let runner = CommandRunner::new(cell.get_formula());
-    drop(cell);
+            let (value, _) = get_dependency_value(runner, &cell, lock.clone());
 
-    let (hash, _, check) = get_dependency_value(&runner, lock.clone());
+            let mut cell = cell_lock.write().unwrap();
+            for i in cell.update(value) {
+                let lock = lock.clone();
+                let dependency = dependency.clone();
+                spawn(move || {
+                    update_dependencies(i, lock, dependency);
+                });
+            }
+        }
+        Status::Err => {
+            let cell_lock = get_or_insert(lock.clone(), &cell);
+            let mut c = cell_lock.write().unwrap();
 
-    let value: CellValue = if check {
-        runner.run(&hash)
-    } else {
-        CellValue::Error("Reference a Error Cell.".to_string())
-    };
-
-    let mut cell = cell_lock.write().unwrap();
-    cell.update(value, lock);
+            for i in c.update_err(cell) {
+                let lock = lock.clone();
+                let dependency = dependency.clone();
+                spawn(move || {
+                    update_dependencies(i, lock, dependency);
+                });
+            }
+        }
+        Status::ErrChanged => {}
+    }
 }

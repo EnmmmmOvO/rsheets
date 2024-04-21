@@ -1,4 +1,5 @@
 mod cell;
+mod dependency;
 mod lib;
 mod lock_pool;
 

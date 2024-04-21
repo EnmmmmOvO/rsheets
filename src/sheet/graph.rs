@@ -59,9 +59,10 @@ pub fn dfs_recursive(
         let sheet_temp = sheet.clone();
         let graph_temp = graph_lock.clone();
         spawn(move || {
+            update_dependencies(cell, sheet_temp.clone(), graph_temp.clone());
             dfs_recursive(graph_temp.clone(), neighbor, sheet_temp.clone());
-            update_dependencies(cell, sheet_temp, graph_temp);
         });
+
     }
 }
 

@@ -136,7 +136,6 @@ pub fn dfs_recursive(
     for (neighbor, cell) in temp {
         let sheet = sheet.clone();
         if !visited.contains(&neighbor) {
-            println!("Updating {}", cell);
             visited.insert(neighbor);
             let graph_temp = graph_lock.clone();
             let sheet_temp = sheet.clone();
